@@ -8,9 +8,68 @@ Usage: python scripts/train_stage1_v2.py
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template
 from trl import SFTTrainer
-from transformers import TrainingArguments
+from transformers import TrainingArguments, TrainerCallback
 from datasets import load_dataset
 import torch
+
+
+class SampleGenerationCallback(TrainerCallback):
+    """Generate sample responses every N steps to monitor training"""
+
+    def __init__(self, model, tokenizer, every_n_steps=100):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.every_n_steps = every_n_steps
+        self.test_prompts = [
+            "What is the capital of France?",
+            "Explain machine learning in one sentence.",
+            "What is 2 + 2?",
+        ]
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % self.every_n_steps == 0 and state.global_step > 0:
+            print(f"\n{'='*60}")
+            print(f"SAMPLE GENERATION - Step {state.global_step}")
+            print(f"{'='*60}")
+
+            # Get prompt
+            idx = (state.global_step // self.every_n_steps) % len(self.test_prompts)
+            prompt = self.test_prompts[idx]
+
+            try:
+                # Prepare input
+                messages = [{"role": "user", "content": prompt}]
+                inputs = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors="pt"
+                ).to(self.model.device)
+
+                # Generate
+                self.model.eval()
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        input_ids=inputs,
+                        max_new_tokens=50,
+                        do_sample=False,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                    )
+                self.model.train()
+
+                # Decode
+                response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                assistant_response = response.split("assistant")[-1].strip()[:150]
+
+                print(f"Q: {prompt}")
+                print(f"A: {assistant_response}")
+
+            except Exception as e:
+                print(f"Generation failed: {e}")
+
+            print(f"{'='*60}\n")
+
+        return control
 
 # ============== CONFIG ==============
 MODEL_NAME = "Qwen/Qwen2.5-3B"
@@ -95,6 +154,9 @@ training_args = TrainingArguments(
     report_to="none",
 )
 
+# Create callback for sample generation
+sample_callback = SampleGenerationCallback(model, tokenizer, every_n_steps=100)
+
 # Create trainer
 trainer = SFTTrainer(
     model=model,
@@ -103,6 +165,7 @@ trainer = SFTTrainer(
     dataset_text_field="text",
     max_seq_length=MAX_SEQ_LENGTH,
     args=training_args,
+    callbacks=[sample_callback],
 )
 
 # Print training info
