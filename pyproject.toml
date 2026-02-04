@@ -1,0 +1,12 @@
+[project]
+name = "qwen-fc-sft"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "datasets>=4.5.0",
+    "huggingface-hub>=1.3.7",
+    "litellm>=1.81.7",
+    "transformers>=5.0.0",
+]
