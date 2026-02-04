@@ -51,7 +51,7 @@ class SampleGenerationCallback(TrainerCallback):
                 with torch.no_grad():
                     outputs = self.model.generate(
                         input_ids=inputs,
-                        max_new_tokens=50,
+                        max_new_tokens=150,  # Allow longer, but should stop at <|im_end|>
                         do_sample=False,
                         pad_token_id=self.tokenizer.pad_token_id,
                         eos_token_id=self.im_end_id,  # Stop on <|im_end|>
@@ -63,8 +63,8 @@ class SampleGenerationCallback(TrainerCallback):
                 has_eos = self.im_end_id in generated.tolist()
 
                 print(f"Q: {prompt}")
-                print(f"A: {response[:150]}")
-                print(f"   [stopped: {'YES' if has_eos else 'NO'}, tokens: {len(generated)}]")
+                print(f"A: {response}")
+                print(f"   [tokens: {len(generated)}, stopped: {'YES <|im_end|>' if has_eos else 'NO (hit 150)'}]")
 
             except Exception as e:
                 print(f"Generation failed: {e}")
@@ -82,7 +82,7 @@ MAX_SEQ_LENGTH = 2048
 BATCH_SIZE = 4
 GRAD_ACCUM = 4
 LEARNING_RATE = 2e-4
-NUM_EPOCHS = 2  # More epochs for better learning
+NUM_EPOCHS = 1
 LORA_R = 16
 LORA_ALPHA = 16
 # ====================================
