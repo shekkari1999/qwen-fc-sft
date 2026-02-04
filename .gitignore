@@ -1,0 +1,5 @@
+data/
+.python-version
+uv.lock
+checkpoints/
+__pycache__/

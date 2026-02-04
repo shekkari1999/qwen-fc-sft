@@ -312,14 +312,235 @@ Training:
 
 ## Part 5: Training {#part-5-training}
 
-*Coming soon after training completes...*
+### The Setup Journey (Dependency Hell)
 
-Topics to cover:
-- Unsloth setup on RunPod
-- Training logs and metrics
-- Loss curves
-- Checkpoint management
-- Common issues and solutions
+Setting up Unsloth on RunPod wasn't straightforward. Here's what we learned:
+
+**Attempt 1: PyTorch 2.4.0 Template**
+```
+AttributeError: module 'torch._inductor' has no attribute 'config'
+```
+Unsloth 2026.x requires torch 2.5+ for `torch._inductor.config`.
+
+**Attempt 2: Upgrade to torch 2.5.1**
+```
+AttributeError: module 'torch' has no attribute 'int1'
+```
+Now `torchao` (pulled by transformers) needs torch 2.6+.
+
+**Attempt 3: Upgrade to torch 2.6.0**
+```
+NotImplementedError: Using datasets = 4.5.0 will cause recursion errors.
+```
+Unsloth needs datasets ≤ 4.3.0.
+
+**Attempt 4: Fix datasets version**
+```
+ImportError: cannot import name 'device_synchronize' from 'unsloth_zoo'
+```
+Unsloth and unsloth-zoo packages out of sync.
+
+**The Solution: Official Unsloth Docker Image**
+
+Stop fighting dependencies. Use `unsloth/unsloth:latest` on RunPod:
+
+```
+Template: Unsloth Fine-tuning Template
+Image: docker.io/unsloth/unsloth
+```
+
+Everything works out of the box. Lesson learned: **use official images for complex ML stacks.**
+
+---
+
+### Understanding the Training Code
+
+Let's break down `train_stage1.py`:
+
+#### 1. Model Loading with QLoRA
+
+```python
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="Qwen/Qwen2.5-3B",
+    max_seq_length=2048,
+    dtype=torch.bfloat16,
+    load_in_4bit=True,  # QLoRA magic
+)
+```
+
+**What's happening:**
+- Base model weights loaded in 4-bit (75% memory savings)
+- Only ~1.5GB for a 3B model instead of 6GB
+- Training happens in BF16, but base stays frozen in 4-bit
+
+#### 2. LoRA Adapter Configuration
+
+```python
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,                    # Rank - dimensions for adaptation
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",  # Attention
+        "gate_proj", "up_proj", "down_proj"       # MLP
+    ],
+    lora_alpha=16,
+    lora_dropout=0,
+    use_gradient_checkpointing="unsloth",
+)
+```
+
+**LoRA Math:**
+- Original weight: W (3072 × 3072 for hidden_size)
+- LoRA adds: W + BA where B is (3072 × 16) and A is (16 × 3072)
+- Parameters: 3072 × 16 × 2 = 98K per layer vs 9.4M original
+- **~100x fewer trainable parameters**
+
+With 7 target modules across 36 layers:
+```
+Trainable params: ~50M (1.6% of 3B)
+Frozen params: ~3B (98.4%)
+```
+
+#### 3. Data Formatting
+
+```python
+def format_chat(examples):
+    texts = []
+    for messages in examples["messages"]:
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+        texts.append(text)
+    return {"text": texts}
+```
+
+This converts:
+```json
+{"messages": [{"role": "user", "content": "Hi"}]}
+```
+
+To Qwen's format:
+```
+<|im_start|>user
+Hi<|im_end|>
+<|im_start|>assistant
+```
+
+#### 4. Training Arguments
+
+```python
+TrainingArguments(
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,  # Effective batch = 16
+    warmup_steps=100,
+    learning_rate=2e-4,
+    bf16=True,
+    optim="adamw_8bit",  # 8-bit optimizer states
+)
+```
+
+**Memory breakdown:**
+| Component | Memory |
+|-----------|--------|
+| Model weights (4-bit) | ~1.5 GB |
+| LoRA adapters (BF16) | ~100 MB |
+| Optimizer states (8-bit) | ~100 MB |
+| Gradients | ~100 MB |
+| Activations | ~2-4 GB |
+| **Total** | **~6-8 GB** |
+
+This is why QLoRA + 8-bit optimizer lets us train 3B models on 20GB GPUs.
+
+---
+
+### Monitoring Training
+
+#### Loss Interpretation
+
+```
+{'loss': 1.531, ...}  # Start
+{'loss': 1.361, ...}  # After 30 steps
+{'loss': 1.287, ...}  # After 100 steps
+{'loss': 1.260, ...}  # Stabilizing
+```
+
+**What the numbers mean:**
+
+| Loss | Probability of correct token |
+|------|------------------------------|
+| 2.0 | ~13% |
+| 1.5 | ~22% |
+| 1.0 | ~37% |
+| 0.5 | ~60% |
+
+**Healthy signs:**
+- Loss decreasing (model learning)
+- Gradient norm stable (0.08-0.15)
+- No sudden spikes
+
+**Warning signs:**
+- Loss increasing → LR too high
+- Loss < 0.3 → possible overfitting
+- Gradient norm exploding → training unstable
+
+#### Learning Rate Schedule
+
+We use linear warmup + cosine decay:
+
+```
+LR
+0.0002 |        ___
+       |      /    \
+       |     /      \___
+       |    /            \___
+       |   /                  \___
+0      |__/________________________\____
+       0   100                    3125  Steps
+         warmup     cosine decay
+```
+
+Warmup prevents early instability when gradients are noisy.
+
+---
+
+### Training Timeline
+
+**Hardware:** RTX 4000 Ada (20GB VRAM)
+
+| Stage | Examples | Steps | Time |
+|-------|----------|-------|------|
+| Stage 1 (Chat) | 50,000 | 3,125 | ~4 hours |
+| Stage 2 (FC) | 60,000 | 3,750 | ~4.5 hours |
+| **Total** | 110,000 | 6,875 | **~8.5 hours** |
+
+For faster training:
+- A6000 (48GB): ~2x faster
+- A100 (80GB): ~4x faster
+- H100 (80GB): ~6x faster
+
+---
+
+### Checkpointing Strategy
+
+```python
+# Save LoRA adapters only (~100MB)
+model.save_pretrained(f"{OUTPUT_DIR}/final")
+
+# Save merged model (~6GB) - ready for inference
+model.save_pretrained_merged(
+    f"{OUTPUT_DIR}/merged",
+    tokenizer,
+    save_method="merged_16bit"
+)
+```
+
+**Two outputs:**
+1. `/final` - Just adapters, needs base model to use
+2. `/merged` - Standalone model, ready for vLLM
+
+We use `/merged` for Stage 2 (build on top) and final deployment.
 
 ---
 
