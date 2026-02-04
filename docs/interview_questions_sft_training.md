@@ -10,7 +10,12 @@ Based on hands-on experience fine-tuning Qwen2.5-3B for function calling.
 3. [Memory & Activations](#memory--activations)
 4. [Training Dynamics](#training-dynamics)
 5. [Inference Optimizations](#inference-optimizations)
-6. [Data & Preprocessing](#data--preprocessing)
+6. [Base Model vs Chat-Tuned Model](#base-model-vs-chat-tuned-model)
+7. [Decoding Strategies](#decoding-strategies)
+8. [Data & Preprocessing](#data--preprocessing)
+9. [SFT Training Loop (Plain PyTorch)](#sft-training-loop-plain-pytorch)
+10. [Precision & Numerical Stability](#precision--numerical-stability)
+11. [LoRA Configuration Details](#lora-configuration-details)
 
 ---
 
@@ -426,6 +431,355 @@ KV cache is filling up. Solutions:
 | Lower GPU utilization | `gpu_memory_utilization=0.8` |
 | Quantize model | AWQ/GPTQ 4-bit |
 | Limit concurrent requests | `max_num_seqs=8` |
+
+---
+
+## Base Model vs Chat-Tuned Model
+
+### Q: If we can use sampling parameters (temperature, top_p) to fix repetition, why do we need to fine-tune at all?
+
+**Answer:**
+
+Sampling parameters fix the **style** of generation. Fine-tuning changes the **behavior**.
+
+**Base model behavior (no fine-tuning):**
+
+Base models are trained on next-token prediction on raw text. Given:
+```
+Input: "What is the capital of France?"
+```
+
+A base model might:
+- Continue like a document: `"What is the capital of France? This question is often asked in geography..."`
+- Generate more questions: `"What is the capital of France? What is the capital of Germany?"`
+- Write an essay: `"What is the capital of France? France, officially the French Republic..."`
+
+**It doesn't understand it should ANSWER you.**
+
+**Chat-tuned model behavior:**
+
+After SFT with chat data, the model learns:
+1. **Role separation**: System, User, Assistant are distinct roles
+2. **Instruction following**: User asks → Assistant answers
+3. **When to stop**: Generate EOS token after completing response
+4. **Response format**: Direct, helpful, conversational answers
+
+---
+
+### Q: What does sampling vs fine-tuning each fix?
+
+**Answer:**
+
+| Problem | Solution |
+|---------|----------|
+| Model doesn't answer, just continues text | **Chat SFT** (changes behavior) |
+| Model answers but repeats itself | **Sampling parameters** (changes style) |
+| Model doesn't stop generating | **EOS token training + stop tokens** |
+| Model can't use tools | **Function calling SFT** |
+| Model hallucinates facts | **RLHF / DPO** (alignment) |
+
+**Key insight:**
+```
+Sampling = Controls HOW text is generated (creativity, randomness)
+Fine-tuning = Controls WHAT the model learns to do (follow instructions, use tools)
+```
+
+---
+
+## Decoding Strategies
+
+### Q: What is greedy decoding and when does it fail?
+
+**Answer:**
+
+**Greedy decoding:** Always pick the highest probability token.
+
+```python
+outputs = model.generate(
+    input_ids=inputs,
+    do_sample=False,  # Greedy!
+)
+```
+
+**How it works:**
+```
+Step 1: P(The)=0.3, P(A)=0.2, P(Paris)=0.15 → Pick "The"
+Step 2: P(capital)=0.4, P(answer)=0.3 → Pick "capital"
+...always pick highest probability
+```
+
+**When it fails:**
+
+1. **Repetition loops:**
+   ```
+   "The answer is 4. The answer is 4. The answer is 4..."
+   ```
+   Once "The" has high probability, it keeps picking it.
+
+2. **Suboptimal sequences:**
+   ```
+   Greedy picks: "The" → "capital" → "is" → stuck
+   Better path:  "Paris" → "is" → "the" → "capital" (lower start, better end)
+   ```
+
+**Use greedy when:** Deterministic output needed (math, code, structured data)
+
+---
+
+### Q: What is temperature and how does it affect generation?
+
+**Answer:**
+
+Temperature scales the logits before softmax:
+
+```python
+# Without temperature
+probs = softmax(logits)
+
+# With temperature
+probs = softmax(logits / temperature)
+```
+
+**Effect:**
+
+| Temperature | Effect | Use Case |
+|-------------|--------|----------|
+| 0.0 | Same as greedy (argmax) | Deterministic |
+| 0.3 | Very focused, low variance | Code, factual |
+| 0.7 | Balanced creativity | General chat |
+| 1.0 | Original distribution | Default |
+| 1.5+ | Very random, chaotic | Creative writing |
+
+**Example (logits = [2.0, 1.0, 0.5]):**
+```
+temp=1.0: probs = [0.59, 0.24, 0.17]  # Moderate spread
+temp=0.5: probs = [0.76, 0.17, 0.07]  # More concentrated
+temp=2.0: probs = [0.42, 0.33, 0.25]  # More uniform
+```
+
+**Low temp:** Model more confident, picks likely tokens
+**High temp:** Model more random, explores unlikely tokens
+
+---
+
+### Q: What is nucleus sampling (top-p)?
+
+**Answer:**
+
+**Top-p (nucleus) sampling:** Sample from smallest set of tokens whose cumulative probability ≥ p.
+
+```python
+outputs = model.generate(
+    do_sample=True,
+    top_p=0.9,  # Sample from top 90% probability mass
+)
+```
+
+**How it works:**
+
+```
+Sorted probs: [0.40, 0.25, 0.15, 0.10, 0.05, 0.03, 0.02]
+              Token A  B     C     D     E     F     G
+
+top_p=0.9:
+Cumulative:  [0.40, 0.65, 0.80, 0.90, ...]
+                                   ↑ Stop here!
+
+Sample from: {A, B, C, D} only (covers 90% probability)
+Ignore: {E, F, G} (unlikely tokens, might be garbage)
+```
+
+**Why top-p > top-k:**
+
+| Method | Problem |
+|--------|---------|
+| Top-k (always k tokens) | Fixed k doesn't adapt to confidence |
+| Top-p (dynamic set) | Adapts: confident = few tokens, uncertain = many |
+
+```
+Confident: P = [0.85, 0.10, 0.05]
+           top_p=0.9 → only {A} (1 token)
+           top_k=3 → {A, B, C} (forces bad options)
+
+Uncertain: P = [0.20, 0.18, 0.17, 0.15, 0.15, 0.15]
+           top_p=0.9 → {A, B, C, D, E} (5 tokens, good!)
+           top_k=3 → {A, B, C} (misses valid options)
+```
+
+---
+
+### Q: What is repetition penalty and how does it work?
+
+**Answer:**
+
+**Repetition penalty:** Divide logits of already-generated tokens by penalty factor.
+
+```python
+outputs = model.generate(
+    repetition_penalty=1.2,  # Penalize repeated tokens
+)
+```
+
+**How it works:**
+
+```
+Generated so far: ["The", "answer", "is", "4"]
+
+Next token logits (before penalty):
+"The": 2.5,  "answer": 2.0,  "is": 1.8,  "Paris": 1.5
+
+After repetition_penalty=1.2:
+"The": 2.5/1.2 = 2.08  ← Penalized (already used)
+"answer": 2.0/1.2 = 1.67  ← Penalized
+"is": 1.8/1.2 = 1.5  ← Penalized
+"Paris": 1.5  ← NOT penalized (new token)
+
+Result: "Paris" more likely to be chosen!
+```
+
+**Values:**
+- 1.0 = No penalty (default)
+- 1.1-1.2 = Light penalty (recommended)
+- 1.5+ = Strong penalty (might break grammar)
+
+---
+
+### Q: What's the difference between repetition_penalty and frequency/presence penalty?
+
+**Answer:**
+
+| Method | How it works | Used by |
+|--------|--------------|---------|
+| repetition_penalty | Divides logits by factor | HuggingFace |
+| frequency_penalty | Subtracts `count × penalty` | OpenAI |
+| presence_penalty | Subtracts flat penalty if token appeared | OpenAI |
+
+**Frequency penalty:**
+```
+"the" appeared 5 times
+frequency_penalty = 0.5
+logit_adjustment = -5 × 0.5 = -2.5
+
+More appearances = stronger penalty
+```
+
+**Presence penalty:**
+```
+"the" appeared (any count)
+presence_penalty = 0.5
+logit_adjustment = -0.5
+
+Binary: appeared or not (count doesn't matter)
+```
+
+**Use cases:**
+- **frequency_penalty:** Prevent word spam ("very very very very")
+- **presence_penalty:** Encourage vocabulary diversity
+
+---
+
+### Q: What are stop tokens and why are they important?
+
+**Answer:**
+
+**Stop tokens:** Tokens that tell generation to stop.
+
+```python
+outputs = model.generate(
+    eos_token_id=tokenizer.eos_token_id,  # <|im_end|> for Qwen
+    # OR
+    stop_strings=["<|im_end|>", "\n\nUser:"],
+)
+```
+
+**Without proper stop tokens:**
+```
+User: What is 2+2?
+Assistant: 4.<|im_end|>
+User: What is 3+3?  ← Model generates fake user!
+Assistant: 6.
+...keeps going forever
+```
+
+**With stop tokens:**
+```
+User: What is 2+2?
+Assistant: 4.<|im_end|>  ← STOP!
+```
+
+**Why SFT matters:**
+- Base model doesn't know when to emit EOS
+- Chat SFT teaches: "after answering, generate EOS"
+- Model learns from data: every assistant turn ends with EOS
+
+---
+
+### Q: Give me optimal generation settings for different tasks.
+
+**Answer:**
+
+```python
+# Factual Q&A (deterministic)
+generate(
+    do_sample=False,  # Greedy
+    max_new_tokens=256,
+)
+
+# General chat
+generate(
+    do_sample=True,
+    temperature=0.7,
+    top_p=0.9,
+    repetition_penalty=1.1,
+    max_new_tokens=512,
+)
+
+# Creative writing
+generate(
+    do_sample=True,
+    temperature=1.0,
+    top_p=0.95,
+    repetition_penalty=1.0,  # Allow some repetition for style
+    max_new_tokens=1024,
+)
+
+# Code generation
+generate(
+    do_sample=True,
+    temperature=0.2,  # Low randomness
+    top_p=0.9,
+    max_new_tokens=1024,
+)
+
+# Function calling (structured output)
+generate(
+    do_sample=False,  # Deterministic JSON
+    max_new_tokens=256,
+)
+```
+
+---
+
+### Q: Production ChatGPT repeats itself sometimes. Why?
+
+**Answer:**
+
+Yes! Even production models can repeat because:
+
+1. **Autoregressive nature:** Each token conditions on previous - loops can form
+
+2. **Context window limits:** Long conversations lose early context
+
+3. **Sampling randomness:** Even with penalties, repetition is possible
+
+**How production mitigates:**
+- Repetition penalties
+- Dynamic temperature adjustment
+- Post-processing filters
+- Context summarization
+- User feedback loops (thumbs down on repetition)
+
+**Key insight:** Repetition is a fundamental LLM challenge, not a training bug. It's reduced, not eliminated.
 
 ---
 
