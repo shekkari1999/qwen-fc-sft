@@ -17,6 +17,7 @@ Based on hands-on experience fine-tuning Qwen2.5-3B for function calling.
 10. [Precision & Numerical Stability](#precision--numerical-stability)
 11. [LoRA Configuration Details](#lora-configuration-details)
 12. [Debugging Case Study: Model Won't Stop Generating](#debugging-case-study-model-wont-stop-generating)
+13. [LoRA Merging Issue: Tied Embeddings](#lora-merging-issue-tied-embeddings)
 
 ---
 
@@ -1514,6 +1515,155 @@ python scripts/debug_tokens.py
 ---
 
 **Key Lesson:** When debugging "model won't stop", don't just check data format and masking. Check the actual **probability** the model assigns to the stop token. Zero probability = `lm_head` issue.
+
+---
+
+## LoRA Merging Issue: Tied Embeddings
+
+### The Problem
+
+After adding `lm_head` to LoRA target modules and training successfully, we discovered:
+
+- **LoRA adapter works perfectly** - model stops correctly
+- **Merged model fails** - generates garbage after responses, never stops
+
+```bash
+# LoRA adapter (works)
+python scripts/inference.py --model ./checkpoints/stage1/final -i
+You: What is the capital of France?
+AI: The capital of France is Paris. [stopped: YES]
+
+# Merged model (broken)
+python scripts/inference.py --model ./checkpoints/stage1/merged -i
+You: What is the capital of France?
+AI: The capital of France is Paris. It is... BCHP BCHP BCHP BCHP... [stopped: NO]
+```
+
+### Root Cause: Tied Word Embeddings
+
+Qwen (and many modern LLMs) use **tied embeddings**:
+
+```python
+model.config.tie_word_embeddings = True
+# This means: lm_head.weight = embed_tokens.weight (same tensor!)
+```
+
+**What happens during LoRA merge:**
+
+```
+Before merge:
+┌─────────────┐     ┌─────────────┐
+│ embed_tokens │────►│   lm_head   │  (tied - same weights)
+│   (base)    │     │   (base)    │
+└─────────────┘     └─────────────┘
+       │                   │
+       ▼                   ▼
+   ┌───────┐           ┌───────┐
+   │LoRA_A │           │LoRA_A │  (separate LoRA adapters)
+   │LoRA_B │           │LoRA_B │
+   └───────┘           └───────┘
+
+After naive merge:
+┌─────────────┐     ┌─────────────┐
+│ embed_tokens │     │   lm_head   │  (NO LONGER TIED!)
+│  + LoRA     │     │   + LoRA    │  (different merged weights)
+└─────────────┘     └─────────────┘
+```
+
+The merge breaks the weight tying, corrupting the model's output projection.
+
+### The Warning
+
+PEFT shows this warning (easy to miss):
+
+```
+UserWarning: Model has `tie_word_embeddings=True` and a tied layer is part of
+the adapter, but `ensure_weight_tying` is not set to True. This can lead to
+complications, for example when merging the adapter...
+```
+
+### Solution: Use LoRA Adapter Directly
+
+**Don't merge. Use the adapter for inference:**
+
+```python
+# Load base model + LoRA adapter (correct)
+model, tokenizer = FastLanguageModel.from_pretrained("./checkpoints/stage1/final")
+```
+
+**Why this works:**
+
+| Inference Method | How it works | Tied weights |
+|------------------|--------------|--------------|
+| LoRA adapter | Base + LoRA computed on-the-fly | Preserved ✅ |
+| Merged model | Weights baked together | Broken ❌ |
+
+### Production Deployment with LoRA Adapters
+
+**vLLM supports LoRA natively:**
+
+```bash
+# Serve base model with LoRA adapter
+vllm serve Qwen/Qwen2.5-3B \
+    --lora-modules chat-model=./checkpoints/stage1/final
+
+# Request with adapter
+curl http://localhost:8000/v1/chat/completions \
+    -d '{"model": "chat-model", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+**Benefits of adapter deployment:**
+- Hot-swap different fine-tunes on same base model
+- Memory efficient (base model shared)
+- Multiple adapters served simultaneously
+
+### Interview Questions
+
+**Q: Your LoRA-trained model works during training but after merging, it generates garbage. What happened?**
+
+**A:** Check if the model has `tie_word_embeddings=True` and if `lm_head` or `embed_tokens` is in your LoRA targets. Merging breaks weight tying between these layers. Solution: Use the LoRA adapter directly for inference instead of merging, or ensure proper weight re-tying after merge.
+
+---
+
+**Q: What are tied embeddings and why do LLMs use them?**
+
+**A:** Tied embeddings means `embed_tokens.weight == lm_head.weight` (same tensor).
+
+- `embed_tokens`: Converts token IDs → embeddings (input)
+- `lm_head`: Converts hidden states → token logits (output)
+
+**Why tie them:**
+1. **Parameter efficiency** - Saves ~vocab_size × hidden_size params (~300M for Qwen)
+2. **Semantic consistency** - Input and output use same token representations
+3. **Better generalization** - Shared learning between encoding and decoding
+
+---
+
+**Q: How do you deploy a LoRA fine-tuned model in production?**
+
+**A:** Two options:
+
+1. **Merge and deploy** (if no tied embedding issues):
+   ```python
+   merged_model = model.merge_and_unload()
+   merged_model.save_pretrained("./merged")
+   # Deploy merged model normally
+   ```
+
+2. **Deploy with adapter** (recommended for tied embeddings):
+   ```bash
+   # vLLM
+   vllm serve base-model --lora-modules my-ft=./adapter
+
+   # TGI
+   text-generation-launcher --model-id base-model --lora-adapters my-ft=./adapter
+   ```
+
+   Benefits: Hot-swap adapters, memory efficient, multiple fine-tunes on one base.
+
+---
+
+**Key Lesson:** When using LoRA on `lm_head` or `embed_tokens` with models that have `tie_word_embeddings=True`, avoid merging. Use the adapter directly for inference.
 
 ---
 
