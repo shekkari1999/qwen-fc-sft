@@ -304,7 +304,7 @@ def train_dpo(data_path, base_model, output_dir, epochs, lr, batch_size, push_to
         optim="adamw_8bit",
         seed=42,
         report_to="none",
-        beta=0.1,  # DPO temperature - lower = stronger preference learning
+        beta=0.05,  # DPO temperature - lower = stronger preference learning
         max_length=2048,
         max_prompt_length=1024,
     )
@@ -320,7 +320,7 @@ def train_dpo(data_path, base_model, output_dir, epochs, lr, batch_size, push_to
     )
 
     # Train
-    print(f"\nStarting DPO training ({epochs} epochs, lr={lr}, beta=0.1)...")
+    print(f"\nStarting DPO training ({epochs} epochs, lr={lr}, beta=0.05)...")
     trainer.train()
 
     # Save
@@ -370,7 +370,7 @@ if __name__ == "__main__":
 
     elif args.stage == 3:
         args.lr = 5e-6  # Even lower LR for DPO
-        args.epochs = 3  # DPO typically needs more epochs on small data
+        args.epochs = 5  # More epochs for small DPO data
         if args.base == "Qwen/Qwen2.5-3B":
             args.base = "./checkpoints/stage2/final"
 
