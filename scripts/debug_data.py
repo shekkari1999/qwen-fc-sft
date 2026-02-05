@@ -39,8 +39,10 @@ def debug_data():
         print(repr(text[-200:]))
 
         # Check if it ends with <|im_end|>
-        print(f"\n Ends with '<|im_end|>': {text.rstrip().endswith('<|im_end|>')}")
-        print(f" Ends with '<|im_end|>\\n': {text.endswith('<|im_end|>\\n')}")
+        ends_clean = text.rstrip().endswith('<|im_end|>')
+        ends_with_newline = text.endswith('<|im_end|>\n')
+        print(f"\n Ends with '<|im_end|>': {ends_clean}")
+        print(f" Ends with '<|im_end|>' + newline: {ends_with_newline}")
 
         # Tokenize and check last tokens
         tokens = tokenizer.encode(text)
