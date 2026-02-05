@@ -160,7 +160,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", default=None)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--batch", type=int, default=4)
+    parser.add_argument("--batch", type=int, default=2)
     args = parser.parse_args()
 
     # Auto-select data and output based on stage (default to HuggingFace Hub)

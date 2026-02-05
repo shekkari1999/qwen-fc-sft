@@ -16,6 +16,7 @@ Based on hands-on experience fine-tuning Qwen2.5-3B for function calling.
 9. [SFT Training Loop (Plain PyTorch)](#sft-training-loop-plain-pytorch)
 10. [Precision & Numerical Stability](#precision--numerical-stability)
 11. [LoRA Configuration Details](#lora-configuration-details)
+12. [Debugging Case Study: Model Won't Stop Generating](#debugging-case-study-model-wont-stop-generating)
 
 ---
 
@@ -1303,6 +1304,216 @@ batch_size=4, accum=4:
 | batch=2, accum=8 | LOWER | 16 |
 
 **Tradeoff:** More accumulation = slower (more forward passes), but same result.
+
+---
+
+## Debugging Case Study: Model Won't Stop Generating
+
+This section documents a real debugging session where the model learned to generate coherent responses but never stopped at `<|im_end|>`.
+
+### The Problem
+
+After training Qwen2.5-3B (base) for 3 epochs on 10K chat examples:
+
+```
+Q: What is 2 + 2?
+A: 2 + 2 = 4.Human: Can you tell me more about Alibaba Cloud...Human: Sure, Alibaba Cloud is a... [stopped: NO]
+
+Q: What is the capital of France?
+A: The capital of France is Paris.Human: Can you tell me more about the history of Paris...Human: Certainly! Paris has been... [stopped: NO]
+```
+
+**Symptoms:**
+- Loss decreased from 1.2 → 1.05 (model IS learning)
+- Responses are coherent and accurate
+- Model generates "Human:" instead of stopping at `<|im_end|>`
+- `[stopped: NO]` on every generation
+
+---
+
+### Debugging Step 1: Verify Label Masking
+
+First, check if the training data has correct labels:
+
+```python
+# debug_masking.py output:
+Pos | Token ID |    Label | Train? | Token
+ 49 |   151644 |     -100 |   mask | '<|im_start|>'
+ 50 |    77091 |     -100 |   mask | 'assistant'
+ 51 |      198 |     -100 |   mask | '\n'
+ 52 |      785 |      785 |  TRAIN | 'The'       # Response starts
+...
+ 94 |        0 |        0 |  TRAIN | '!'
+ 95 |   151645 |   151645 |  TRAIN | '<|im_end|>'  # ✓ Being trained!
+```
+
+**Result:** Masking is CORRECT. System/user masked, assistant response + `<|im_end|>` trained.
+
+---
+
+### Debugging Step 2: Check Data Format
+
+Verify the training data ends with `<|im_end|>`:
+
+```python
+# debug_data.py output:
+Last 10 token IDs: [8411, 311, 19085, 0, 151645, 198]
+Last 10 tokens decoded:
+   19085: ' Scotland'
+   0: '!'
+   151645: '<|im_end|>'    # ✓ Present!
+   198: '\n'
+
+Last non-whitespace token: 151645 = '<|im_end|>'
+Is it <|im_end|>? True
+```
+
+**Result:** Data format is CORRECT. `<|im_end|>` (token 151645) is at the end.
+
+---
+
+### Debugging Step 3: Check Token Probabilities (THE KEY INSIGHT)
+
+Check what probability the trained model assigns to `<|im_end|>`:
+
+```python
+# debug_probs.py output:
+Step 23:
+  Generated so far: "...I'm here to help with any questions or tasks you may have."
+  Next token: '.' (id=13)
+  <|im_end|> prob: 0.000000 (rank #73198)    # ← ZERO PROBABILITY!
+  Top 5 tokens:
+    1. '.' (0.9688)
+    2. ',' (0.0259)
+    3. '!' (0.0027)
+    4. ' related' (0.0003)
+    5. ' in' (0.0003)
+```
+
+**SMOKING GUN:** The model assigns **ZERO probability** to `<|im_end|>`. Rank #73,198 out of 151K vocabulary.
+
+---
+
+### Root Cause Analysis
+
+**Q: Why does `<|im_end|>` have zero probability after being trained?**
+
+Look at the LoRA configuration:
+
+```python
+target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj"]
+```
+
+**What's trained:**
+- Attention layers (q, k, v, o projections)
+- MLP layers (gate, up, down projections)
+
+**What's NOT trained:**
+- `embed_tokens` - input embeddings
+- `lm_head` - **output projection that converts hidden states → token probabilities**
+
+**The Problem:**
+
+```
+                    ┌─────────────────┐
+Hidden States ────► │    lm_head      │ ────► Token Probabilities
+                    │   (NOT TRAINED) │
+                    └─────────────────┘
+```
+
+1. Base model was trained on raw text, never generating `<|im_end|>`
+2. `<|im_end|>` exists in vocabulary but `lm_head` has near-zero weights for it
+3. LoRA only trains attention/MLP, not `lm_head`
+4. No matter how good hidden states are, `lm_head` can't produce `<|im_end|>`
+
+**Analogy:** It's like training someone to think about stopping, but their mouth (lm_head) doesn't know how to say "stop".
+
+---
+
+### The Fix
+
+Add `embed_tokens` and `lm_head` to LoRA target modules:
+
+```python
+# Before (broken):
+target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj"]
+
+# After (fixed):
+target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj",
+                "embed_tokens", "lm_head"]  # ← Added!
+```
+
+**Why this works:**
+- `embed_tokens`: Learns to properly encode special tokens like `<|im_start|>`, `<|im_end|>`
+- `lm_head`: Learns to OUTPUT special tokens with appropriate probability
+
+---
+
+### Interview Questions from This Debugging
+
+**Q: You trained a base model for chat but it never stops generating. Loss decreases, responses are good, but `<|im_end|>` is never produced. What's wrong?**
+
+**A:** Check if `lm_head` (output projection) is being trained. Standard LoRA only trains attention + MLP layers. Base models have never learned to GENERATE `<|im_end|>` - the token exists in vocabulary but has near-zero weights in `lm_head`. Fix by adding `lm_head` and `embed_tokens` to LoRA target_modules.
+
+---
+
+**Q: What's the difference between a token "existing in vocabulary" vs "being producible by the model"?**
+
+**A:**
+- **Exists in vocabulary:** Token has an ID and embedding. Can be used in input.
+- **Producible:** Model's `lm_head` has learned weights to output this token with meaningful probability.
+
+Special tokens like `<|im_end|>` exist in Qwen base model's vocabulary (added during tokenizer creation) but `lm_head` was never trained to produce them since pre-training data doesn't contain these tokens.
+
+---
+
+**Q: Why do instruct models stop correctly but base models don't?**
+
+**A:**
+- **Base model:** Pre-trained on raw text. Never saw `<|im_end|>`. `lm_head` weights for special tokens are random/near-zero.
+- **Instruct model:** Fine-tuned on chat data with full model training (not LoRA). `lm_head` learned to output `<|im_end|>` with high probability at response end.
+
+When using LoRA on base models for chat, you MUST include `lm_head` in target_modules.
+
+---
+
+**Q: What modules should LoRA target for chat fine-tuning on a base model?**
+
+**A:**
+
+| Module | Purpose | Required? |
+|--------|---------|-----------|
+| q_proj, k_proj, v_proj, o_proj | Attention patterns | Yes |
+| gate_proj, up_proj, down_proj | MLP transformations | Yes |
+| embed_tokens | Encode special tokens | Yes for base models |
+| lm_head | Produce special tokens | **Critical for base models** |
+
+For instruct models, `embed_tokens` and `lm_head` are optional since they already know special tokens.
+
+---
+
+### Debugging Commands Summary
+
+```bash
+# 1. Check label masking is correct
+python scripts/debug_masking.py --stage 1
+
+# 2. Check data format
+python scripts/debug_data.py
+
+# 3. Check token probabilities (most important!)
+python scripts/debug_probs.py --model ./checkpoints/stage1/merged
+
+# 4. Check token IDs consistency
+python scripts/debug_tokens.py
+```
+
+---
+
+**Key Lesson:** When debugging "model won't stop", don't just check data format and masking. Check the actual **probability** the model assigns to the stop token. Zero probability = `lm_head` issue.
 
 ---
 
