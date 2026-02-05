@@ -4,10 +4,18 @@ Run on RunPod: python merge_and_push.py
 """
 import subprocess
 import sys
+import os
 
-# Install minimal deps
-print("Installing dependencies...")
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "transformers", "peft", "accelerate", "huggingface_hub"])
+# Force upgrade packages BEFORE importing
+print("Upgrading packages (this may take a minute)...")
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "--force-reinstall",
+                       "transformers>=4.40.0", "peft>=0.10.0", "accelerate", "huggingface_hub"],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+# Clear any cached imports
+for mod in list(sys.modules.keys()):
+    if 'transformers' in mod or 'peft' in mod:
+        del sys.modules[mod]
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -55,7 +63,7 @@ tokenizer.save_pretrained("./tars-3b-merged")
 
 # Push to HuggingFace
 print(f"\nPushing to HuggingFace: {OUTPUT_REPO}")
-model.push_to_hub(OUTPUT_REPO, safe_serialization=True)
+model.push_to_hub(OUTPUT_REPO)
 tokenizer.push_to_hub(OUTPUT_REPO)
 
 print("\n" + "="*50)
