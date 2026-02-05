@@ -110,21 +110,11 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size, push
         # Adapter is already loaded from Stage 1 checkpoint
         print("Continuing training existing LoRA adapter on FC data...")
 
-        # Debug: Print all parameter names to find lm_head
-        print("\n  Checking for lm_head parameters...")
-        lm_head_found = False
+        # Enable lm_head training (needed for <tool_call> special tokens 151657/151658)
         for name, param in model.named_parameters():
             if 'lm_head' in name:
-                print(f"    {name}: requires_grad={param.requires_grad}, shape={param.shape}")
                 param.requires_grad = True
-                lm_head_found = True
-
-        if not lm_head_found:
-            print("  WARNING: No lm_head parameters found! Listing all trainable params:")
-            for name, param in model.named_parameters():
-                if param.requires_grad:
-                    print(f"    {name}")
-                    break  # Just show first few
+                print(f"  Enabled: {name} ({param.numel():,} params)")
 
     # Load data
     print(f"\nLoading data from {data_path}...")
