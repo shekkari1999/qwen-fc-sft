@@ -1,17 +1,14 @@
 """
 TARS - RunPod Setup & Server
 Upload this single file to RunPod and run: python setup_runpod.py
+Uses transformers + peft (no unsloth dependency issues)
 """
 import subprocess
 import sys
 
-# Install/upgrade dependencies
-print("Upgrading unsloth...")
-subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "unsloth", "-y"], stderr=subprocess.DEVNULL)
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", "unsloth", "unsloth_zoo"], stderr=subprocess.DEVNULL)
-
+# Install dependencies
 print("Installing dependencies...")
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "fastapi", "uvicorn", "pydantic"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "fastapi", "uvicorn", "pydantic", "accelerate", "peft"])
 
 # Now import and run server
 from fastapi import FastAPI
@@ -22,8 +19,8 @@ import torch
 import time
 import uvicorn
 from contextlib import asynccontextmanager
-from unsloth import FastLanguageModel
-from unsloth.chat_templates import get_chat_template
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
 models = {}
 tokenizer = None
@@ -45,20 +42,20 @@ async def lifespan(app: FastAPI):
 
     # Load base model
     print("Loading base model (Qwen2.5-3B)...")
-    model, tok = FastLanguageModel.from_pretrained(
+    base_model = AutoModelForCausalLM.from_pretrained(
         "Qwen/Qwen2.5-3B",
-        max_seq_length=2048,
-        dtype=torch.bfloat16,
-        load_in_4bit=True,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
     )
 
-    # Load LoRA adapter
-    print("Loading TARS adapter...")
-    from peft import PeftModel
-    model = PeftModel.from_pretrained(model, "shekkari21/qwen-fc-sft-stage3")
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-3B", trust_remote_code=True)
 
-    tokenizer = get_chat_template(tok, chat_template="qwen-2.5")
-    FastLanguageModel.for_inference(model)
+    # Load LoRA adapter
+    print("Loading TARS adapter (stage3)...")
+    model = PeftModel.from_pretrained(base_model, "shekkari21/qwen-fc-sft-stage3")
+    model.eval()
     models["tars"] = model
 
     print("\n" + "="*50)
@@ -115,23 +112,21 @@ async def chat_completions(request: ChatRequest):
     model = models.get(request.model, models["tars"])
     im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
 
-    # Format messages
+    # Format messages using Qwen chat template
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-    # Tokenize
-    inputs = tokenizer.apply_chat_template(
+    text = tokenizer.apply_chat_template(
         messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors="pt"
-    ).to(model.device)
-
-    prompt_tokens = inputs.shape[1]
+        tokenize=False,
+        add_generation_prompt=True
+    )
+    inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    prompt_tokens = inputs.input_ids.shape[1]
 
     # Generate
     with torch.no_grad():
         outputs = model.generate(
-            input_ids=inputs,
+            **inputs,
             max_new_tokens=request.max_tokens,
             temperature=request.temperature if request.temperature > 0 else None,
             top_p=request.top_p,
@@ -141,7 +136,7 @@ async def chat_completions(request: ChatRequest):
         )
 
     # Decode
-    generated = outputs[0][inputs.shape[1]:]
+    generated = outputs[0][inputs.input_ids.shape[1]:]
     response_text = tokenizer.decode(generated, skip_special_tokens=True).strip()
     completion_tokens = len(generated)
 
