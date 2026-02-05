@@ -25,9 +25,17 @@ def main():
     im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
     print(f"<|im_end|> token ID: {im_end_id}")
 
-    # Check if <tool_call> is a special token
-    tool_call_id = tokenizer.convert_tokens_to_ids("<tool_call>")
-    print(f"<tool_call> token ID: {tool_call_id}")
+    # Check what token 124 actually is
+    print(f"\n--- Token 124 Analysis ---")
+    print(f"Token 124: {repr(tokenizer.convert_ids_to_tokens(124))}")
+
+    # Check how <tool_call> and </tool_call> tokenize
+    print(f"\n--- <tool_call> Tokenization ---")
+    for text in ["<tool_call>", "</tool_call>", "<tool_call>\n", "\n</tool_call>"]:
+        tokens = tokenizer.encode(text, add_special_tokens=False)
+        print(f"{repr(text)} -> {tokens}")
+        for t in tokens:
+            print(f"    {t}: {repr(tokenizer.decode([t]))}")
 
     # System prompt with tools
     system_msg = """You are a helpful assistant with access to the following tools:
