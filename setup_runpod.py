@@ -5,7 +5,11 @@ Upload this single file to RunPod and run: python setup_runpod.py
 import subprocess
 import sys
 
-# Install dependencies
+# Install/upgrade dependencies
+print("Upgrading unsloth...")
+subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "unsloth", "-y"], stderr=subprocess.DEVNULL)
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", "unsloth", "unsloth_zoo"], stderr=subprocess.DEVNULL)
+
 print("Installing dependencies...")
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "fastapi", "uvicorn", "pydantic"])
 
