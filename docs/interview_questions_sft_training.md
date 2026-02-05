@@ -1667,4 +1667,322 @@ curl http://localhost:8000/v1/chat/completions \
 
 ---
 
+## DPO (Direct Preference Optimization)
+
+### Q: What is DPO and how does it differ from SFT?
+
+**Answer:**
+
+| Method | What it learns | Data format | Use case |
+|--------|----------------|-------------|----------|
+| SFT | "Generate this output" | (input, output) pairs | Teach capabilities |
+| DPO | "Prefer this over that" | (input, chosen, rejected) triples | Align preferences |
+
+**SFT:** "Given X, always output Y"
+```
+Input: "What's 2+2?"
+Output: "4"
+```
+
+**DPO:** "Given X, output Y is better than Z"
+```
+Input: "What's 2+2?"
+Chosen: "4"
+Rejected: "The answer is approximately 4.0"
+```
+
+DPO teaches preferences without explicit reward models (unlike RLHF).
+
+---
+
+### Q: Explain the DPO loss function.
+
+**Answer:**
+
+```python
+# DPO loss (simplified)
+loss = -log(sigmoid(beta * (log_prob_chosen - log_prob_rejected)))
+```
+
+**How it works:**
+1. Compute log probability of chosen response: `log π(chosen|prompt)`
+2. Compute log probability of rejected response: `log π(rejected|prompt)`
+3. Push chosen probability UP, rejected probability DOWN
+4. `beta` controls how strongly preferences are enforced
+
+**Beta parameter:**
+- `beta=0.1` → Strong preference learning (aggressive)
+- `beta=0.05` → Weaker preference learning (conservative)
+
+---
+
+### Q: When should you use DPO vs SFT?
+
+**Answer:**
+
+| Scenario | Use |
+|----------|-----|
+| Teach model new capability (chat, code) | SFT |
+| Teach model to follow format | SFT |
+| Teach model WHEN to do something | DPO |
+| Reduce harmful outputs | DPO |
+| Improve response quality/style | DPO |
+| Align with human preferences | DPO |
+
+**Real example from this project:**
+
+- **SFT Stage 2:** Taught model HOW to use tools (`<tool_call>` format)
+- **DPO Stage 3:** Taught model WHEN to use tools vs respond directly
+
+---
+
+### Q: You trained DPO and the model stopped using a capability it had. What happened?
+
+**Answer:**
+
+**DPO overcorrection.** The preference signal was too strong.
+
+**Example from this project:**
+```
+Before DPO: Model uses tools for everything (even "Hello!")
+After DPO:  Model uses tools for nothing (even weather questions!)
+```
+
+**Causes:**
+1. **Beta too high** - preferences enforced too aggressively
+2. **Data imbalance** - too many "don't use tool" examples
+3. **Learning rate too high** - model forgets prior capabilities
+
+**Fixes:**
+1. Lower beta (0.1 → 0.05)
+2. Balance chosen/rejected examples
+3. Lower learning rate
+4. More epochs with lower LR
+
+---
+
+### Q: What does the `beta` parameter control in DPO?
+
+**Answer:**
+
+Beta controls preference strength (like temperature in generation).
+
+```python
+loss = -log(sigmoid(beta * preference_diff))
+```
+
+| Beta | Effect | Use case |
+|------|--------|----------|
+| 0.01 | Very weak preferences | Minor style tweaks |
+| 0.05 | Moderate preferences | Balanced learning |
+| 0.1 | Strong preferences | Clear right/wrong |
+| 0.5+ | Very strong | Risk of overcorrection |
+
+**Rule of thumb:**
+- Start with `beta=0.1`
+- If model loses capabilities → lower to 0.05
+- If model doesn't learn preferences → increase to 0.2
+
+---
+
+### Q: How do you structure DPO data for tool use decisions?
+
+**Answer:**
+
+**Key insight:** Include system prompt with tools in BOTH chosen and rejected.
+
+```json
+{
+  "prompt": "<|im_start|>system\nYou have tools: [get_weather, calculate]\n<|im_end|>\n<|im_start|>user\nHello!\n<|im_end|>\n<|im_start|>assistant\n",
+  "chosen": "Hello! How can I help you today?",
+  "rejected": "<tool_call>{\"name\": \"search_web\"...}</tool_call>"
+}
+```
+
+**Categories needed:**
+
+| Category | Chosen | Rejected |
+|----------|--------|----------|
+| Greetings | Normal response | Tool call |
+| General knowledge | Direct answer | Tool call |
+| Weather questions | Tool call | "I don't have access..." |
+| Calculations | Tool call | Wrong/vague answer |
+| Safety | Refusal | Tool call or harmful |
+
+**Balance:** ~50% should-use-tool, ~50% should-not-use-tool
+
+---
+
+### Q: What's a typical 3-stage post-training pipeline?
+
+**Answer:**
+
+```
+Base Model (Qwen2.5-3B)
+        │
+        ▼ Stage 1: SFT
+┌───────────────────┐
+│ Chat capability   │ ← UltraChat data
+│ Learn <|im_end|>  │ ← 10K examples, lr=1e-4
+└───────────────────┘
+        │
+        ▼ Stage 2: SFT
+┌───────────────────┐
+│ Function calling  │ ← xlam-fc data
+│ Learn <tool_call> │ ← 10K examples, lr=5e-5
+└───────────────────┘
+        │
+        ▼ Stage 3: DPO
+┌───────────────────┐
+│ Tool use decision │ ← Preference pairs
+│ When vs when not  │ ← 300 examples, lr=5e-6, beta=0.05
+└───────────────────┘
+        │
+        ▼
+   Production Model
+```
+
+**Learning rates decrease at each stage** to preserve earlier capabilities.
+
+---
+
+### Q: How much DPO data do you need?
+
+**Answer:**
+
+| Dataset size | Use case |
+|--------------|----------|
+| 100-300 | Focused behavior change (tool decisions) |
+| 500-1000 | Robust preference learning |
+| 2000-5000 | Production quality |
+| 10000+ | Full alignment (like Anthropic) |
+
+**Quality > Quantity for DPO:**
+- Clear distinction between chosen/rejected
+- Diverse examples covering edge cases
+- Balanced categories
+
+**From this project:** 294 pairs was enough to shift behavior (though it overcorrected initially).
+
+---
+
+### Q: DPO training shows loss decreasing but behavior didn't change. Why?
+
+**Answer:**
+
+Possible causes:
+
+1. **lm_head not trainable** - Output layer frozen, can't change token probabilities
+   ```python
+   # Fix: Enable lm_head
+   for name, param in model.named_parameters():
+       if 'lm_head' in name:
+           param.requires_grad = True
+   ```
+
+2. **Beta too low** - Preferences not enforced strongly enough
+
+3. **Data issue** - Chosen and rejected too similar
+
+4. **Evaluation mismatch** - Testing different scenarios than trained
+
+---
+
+### Q: Should you train lm_head in DPO?
+
+**Answer:**
+
+**Yes, especially for:**
+- Special token generation (`<tool_call>`, `</tool_call>`)
+- Changing output distribution significantly
+- Models with tied embeddings
+
+**Why:**
+DPO changes which tokens are preferred. If lm_head is frozen, the final output probabilities can't change even if internal representations do.
+
+```python
+# Check trainable params - should include lm_head
+trainable = [n for n, p in model.named_parameters() if p.requires_grad]
+assert any('lm_head' in n for n in trainable), "lm_head not trainable!"
+```
+
+---
+
+### Q: Compare RLHF vs DPO.
+
+**Answer:**
+
+| Aspect | RLHF | DPO |
+|--------|------|-----|
+| Reward model | Required (separate training) | Not needed |
+| Training stability | Can be unstable | More stable |
+| Compute cost | High (RM + PPO) | Lower (single training) |
+| Data requirement | Comparisons → RM → RL | Direct preference pairs |
+| Implementation | Complex | Simpler |
+
+**DPO advantage:** Directly optimizes for preferences without intermediate reward model.
+
+**RLHF advantage:** More flexible reward shaping, can incorporate real-time feedback.
+
+**When to use DPO:** Most preference learning tasks, especially with clear chosen/rejected pairs.
+
+---
+
+### Q: What went wrong in this debugging scenario?
+
+**Scenario:** After Stage 2 SFT, model uses `<tool_call>` for everything including "Hello, how are you?". After Stage 3 DPO, model never uses `<tool_call>` even for "What's the weather?"
+
+**Answer:**
+
+1. **Stage 2 problem:** Training data was 100% tool calls. Model learned "tools available = always use tools"
+
+2. **Stage 3 overcorrection:** DPO pushed too hard toward "don't use tools" because:
+   - Beta=0.1 was too aggressive
+   - Model "unlearned" tool use instead of learning when to use
+
+**Fix:**
+- Lower beta (0.1 → 0.05)
+- More epochs with lower LR
+- Better balance in DPO data
+- Could also mix SFT examples (with/without tool use) in Stage 2
+
+---
+
+### Q: How do you evaluate DPO success for tool use?
+
+**Answer:**
+
+Create test set with known expected behavior:
+
+```python
+TEST_CASES = [
+    # Should use tools
+    ("What's the weather in Tokyo?", True, "get_weather"),
+    ("Calculate 15 * 7", True, "calculate"),
+
+    # Should NOT use tools
+    ("Hello!", False, None),
+    ("What's the capital of France?", False, None),  # General knowledge
+    ("What causes weather?", False, None),  # Conceptual question
+]
+
+# Evaluate
+for question, should_use, expected_tool in TEST_CASES:
+    response = model.generate(question)
+    used_tool = "<tool_call>" in response
+    correct = (should_use == used_tool)
+```
+
+**Metrics:**
+- Overall accuracy
+- True positive rate (uses tool when should)
+- True negative rate (doesn't use tool when shouldn't)
+- Edge case handling (conceptual vs real-time questions)
+
+---
+
+*Section added based on hands-on DPO training for tool use preference learning.*
+
+---
+
 *Document created during Qwen2.5-3B function calling fine-tuning project.*
