@@ -115,6 +115,11 @@ def debug_masking(data_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data/stage1_chat/train_qwen_single.jsonl")
+    parser.add_argument("--data", default="hf://shekkari21/qwen-fc-sft-data-v2:stage1_chat")
+    parser.add_argument("--stage", type=int, choices=[1, 2], default=None, help="Shortcut: --stage 1 or --stage 2")
     args = parser.parse_args()
+
+    if args.stage:
+        args.data = f"hf://shekkari21/qwen-fc-sft-data-v2:stage{args.stage}_{'chat' if args.stage == 1 else 'fc'}"
+
     debug_masking(args.data)
