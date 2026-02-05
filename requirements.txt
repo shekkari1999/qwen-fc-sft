@@ -1,0 +1,19 @@
+# TARS - vLLM Deployment Requirements
+
+# vLLM for serving
+vllm>=0.4.0
+
+# Gradio UI
+gradio>=4.0.0
+
+# API client
+openai>=1.0.0
+requests>=2.31.0
+
+# Training (if needed)
+unsloth
+trl>=0.7.0
+datasets
+transformers
+torch
+peft
