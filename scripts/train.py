@@ -63,7 +63,7 @@ class GenerationCallback(TrainerCallback):
         return control
 
 
-def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size):
+def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size, push_to_hub=None):
     print("="*60)
     print(f"STAGE {stage} TRAINING")
     print("="*60)
@@ -158,9 +158,15 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size):
     print("\nSaving model...")
     model.save_pretrained(f"{output_dir}/final")
     tokenizer.save_pretrained(f"{output_dir}/final")
-    model.save_pretrained_merged(f"{output_dir}/merged", tokenizer, save_method="merged_16bit")
 
-    print(f"\nDone! Model saved to {output_dir}/merged")
+    # Push to HuggingFace Hub if specified
+    if push_to_hub:
+        print(f"\nPushing adapter to HuggingFace Hub: {push_to_hub}")
+        model.push_to_hub(push_to_hub, token=True)
+        tokenizer.push_to_hub(push_to_hub, token=True)
+        print(f"Pushed to: https://huggingface.co/{push_to_hub}")
+
+    print(f"\nDone! Adapter saved to {output_dir}/final")
 
 
 if __name__ == "__main__":
@@ -172,6 +178,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch", type=int, default=2)
+    parser.add_argument("--push-to-hub", type=str, default=None, help="HuggingFace repo to push adapter (e.g., shekkari21/qwen-fc-sft-stage1)")
     args = parser.parse_args()
 
     # Auto-select data and output based on stage (default to HuggingFace Hub)
@@ -184,6 +191,6 @@ if __name__ == "__main__":
     if args.stage == 2:
         args.lr = 1e-4  # Lower LR for stage 2
         if args.base == "Qwen/Qwen2.5-3B":
-            args.base = "./checkpoints/stage1/merged"
+            args.base = "./checkpoints/stage1/final"  # Use adapter, not merged (tied weights issue)
 
-    train(args.stage, args.data, args.base, args.output, args.epochs, args.lr, args.batch)
+    train(args.stage, args.data, args.base, args.output, args.epochs, args.lr, args.batch, args.push_to_hub)
