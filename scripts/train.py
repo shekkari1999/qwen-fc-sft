@@ -372,7 +372,7 @@ if __name__ == "__main__":
         args.lr = 5e-6  # Even lower LR for DPO
         args.epochs = 5  # More epochs for small DPO data
         if args.base == "Qwen/Qwen2.5-3B":
-            args.base = "./checkpoints/stage2/final"
+            args.base = "shekkari21/qwen-fc-sft-stage2"  # Load from HF
 
     # Run appropriate training
     if args.stage in [1, 2]:
