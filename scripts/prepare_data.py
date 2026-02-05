@@ -127,54 +127,6 @@ Use tools with: <tool_call>{{"name": "...", "arguments": {{...}}}}</tool_call>""
     print("\nPreprocessing complete!")
 
 
-def create_minimal(num_examples=200):
-    """Create minimal short Q&A dataset for testing"""
-    print("="*60)
-    print(f"CREATING MINIMAL DATASET ({num_examples} examples)")
-    print("="*60)
-
-    qa_pairs = [
-        ("What is 2 + 2?", "4"),
-        ("What is 5 + 3?", "8"),
-        ("What is 10 - 4?", "6"),
-        ("What is the capital of France?", "Paris."),
-        ("What is the capital of Japan?", "Tokyo."),
-        ("What is the capital of Germany?", "Berlin."),
-        ("What color is the sky?", "Blue."),
-        ("What color is grass?", "Green."),
-        ("Who wrote Romeo and Juliet?", "William Shakespeare."),
-        ("Who painted the Mona Lisa?", "Leonardo da Vinci."),
-        ("What is the largest planet?", "Jupiter."),
-        ("How many days in a week?", "Seven."),
-        ("Say hello.", "Hello!"),
-        ("Say goodbye.", "Goodbye!"),
-        ("Is water wet?", "Yes."),
-        ("Is fire hot?", "Yes."),
-        ("What is H2O?", "Water."),
-        ("What do dogs say?", "Woof."),
-        ("What do cats say?", "Meow."),
-        ("What is 100 + 1?", "101"),
-    ]
-
-    examples = []
-    for q, a in qa_pairs:
-        examples.append({"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}]})
-
-    while len(examples) < num_examples:
-        examples.append(random.choice(examples[:len(qa_pairs)]))
-
-    random.seed(42)
-    random.shuffle(examples)
-    examples = examples[:num_examples]
-
-    Path("data/minimal").mkdir(parents=True, exist_ok=True)
-    with open("data/minimal/train.jsonl", "w") as f:
-        for ex in examples:
-            f.write(json.dumps(ex) + "\n")
-
-    print(f"  Created {len(examples)} short Q&A examples")
-    print(f"  Saved to data/minimal/train.jsonl")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -186,5 +138,3 @@ if __name__ == "__main__":
         download_data()
     if args.action in ["preprocess", "all"]:
         preprocess_single_turn(args.max)
-    if args.action in ["minimal", "all"]:
-        create_minimal()
