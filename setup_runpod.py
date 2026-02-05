@@ -39,12 +39,20 @@ async def lifespan(app: FastAPI):
     print("   TARS - Loading Model")
     print("="*50 + "\n")
 
+    # Load base model
+    print("Loading base model (Qwen2.5-3B)...")
     model, tok = FastLanguageModel.from_pretrained(
-        "shekkari21/qwen-fc-sft-stage3",
+        "Qwen/Qwen2.5-3B",
         max_seq_length=2048,
         dtype=torch.bfloat16,
         load_in_4bit=True,
     )
+
+    # Load LoRA adapter
+    print("Loading TARS adapter...")
+    from peft import PeftModel
+    model = PeftModel.from_pretrained(model, "shekkari21/qwen-fc-sft-stage3")
+
     tokenizer = get_chat_template(tok, chat_template="qwen-2.5")
     FastLanguageModel.for_inference(model)
     models["tars"] = model
