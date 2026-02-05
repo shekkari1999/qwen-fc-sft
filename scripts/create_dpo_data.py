@@ -808,12 +808,17 @@ def main():
         print(f"Chosen: {p['chosen'][:100]}...")
         print(f"Rejected: {p['rejected'][:100]}...")
 
-    # Push to HuggingFace Hub
+    # Push to HuggingFace Hub (separate repo for DPO data due to different schema)
     if args.push_to_hub:
-        print(f"\nPushing to HuggingFace Hub: {args.push_to_hub}")
+        # DPO data has different schema, push to separate repo
+        dpo_repo = args.push_to_hub.replace("qwen-fc-sft-data", "qwen-fc-sft-dpo-data")
+        if dpo_repo == args.push_to_hub:
+            dpo_repo = args.push_to_hub + "-dpo"
+
+        print(f"\nPushing to HuggingFace Hub: {dpo_repo}")
         dataset = Dataset.from_list(training_ready)
-        dataset.push_to_hub(args.push_to_hub, split="stage3_dpo")
-        print(f"Pushed to: https://huggingface.co/datasets/{args.push_to_hub}")
+        dataset.push_to_hub(dpo_repo, split="train")
+        print(f"Pushed to: https://huggingface.co/datasets/{dpo_repo}")
 
 
 if __name__ == "__main__":

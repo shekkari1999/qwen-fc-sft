@@ -356,8 +356,8 @@ if __name__ == "__main__":
             args.data = "hf://shekkari21/qwen-fc-sft-data-v2:stage1_chat"
         elif args.stage == 2:
             args.data = "hf://shekkari21/qwen-fc-sft-data-v2:stage2_fc"
-        else:  # stage 3
-            args.data = "hf://shekkari21/qwen-fc-sft-data-v2:stage3_dpo"
+        else:  # stage 3 - DPO data in separate repo (different schema)
+            args.data = "hf://shekkari21/qwen-fc-sft-dpo-data-v2:train"
 
     if args.output is None:
         args.output = f"./checkpoints/stage{args.stage}"
