@@ -8,8 +8,8 @@ import json
 import time
 from typing import Generator
 
-# vLLM server config (RunPod endpoint)
-VLLM_URL = "https://tch5lmp6hj0b9h-8000.proxy.runpod.net/v1/chat/completions"
+# Server config (RunPod endpoint)
+VLLM_URL = "https://maqaxxpne2iewn-8000.proxy.runpod.net/v1/chat/completions"
 
 # Available tools for the model
 AVAILABLE_TOOLS = [
@@ -198,7 +198,7 @@ def create_ui():
     }
     """
 
-    with gr.Blocks(css=custom_css, theme=gr.themes.Base(primary_hue="red", neutral_hue="slate")) as demo:
+    with gr.Blocks() as demo:
 
         # Header
         gr.HTML("""
@@ -254,10 +254,7 @@ def create_ui():
             with gr.Column(scale=3):
                 chatbot = gr.Chatbot(
                     label="Chat",
-                    height=500,
-                    show_copy_button=True,
-                    avatar_images=(None, "https://api.dicebear.com/7.x/bottts/svg?seed=tars"),
-                    elem_classes=["chat-window"]
+                    height=500
                 )
 
                 # Stats display
@@ -318,16 +315,27 @@ def create_ui():
             </div>
         """)
 
-        # Event handlers
+        # Event handlers (Gradio 6.0 format)
         def user_message(message, history):
-            return "", history + [[message, None]]
+            history = history or []
+            history.append({"role": "user", "content": message})
+            return "", history
 
         def bot_response(history, stage, temperature, max_tokens, top_p):
-            message = history[-1][0]
-            history_prev = history[:-1]
+            # Extract user message and previous history
+            user_msg = history[-1]["content"]
+            # Convert history to old format for chat_with_model
+            history_old = []
+            for i in range(0, len(history) - 1, 2):
+                if i + 1 < len(history):
+                    history_old.append([history[i]["content"], history[i+1]["content"]])
 
-            for response, stats in chat_with_model(message, history_prev, stage, temperature, max_tokens, top_p):
-                history[-1][1] = response
+            for response, stats in chat_with_model(user_msg, history_old, stage, temperature, max_tokens, top_p):
+                # Add/update assistant response
+                if len(history) > 0 and history[-1]["role"] == "assistant":
+                    history[-1]["content"] = response
+                else:
+                    history.append({"role": "assistant", "content": response})
                 yield history, stats
 
         # Submit on enter or button click
