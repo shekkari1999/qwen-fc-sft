@@ -20,21 +20,44 @@ import argparse
 
 class GenerationCallback(TrainerCallback):
     """Monitor training with sample generations"""
-    def __init__(self, model, tokenizer, every_n_steps=50):
+    def __init__(self, model, tokenizer, every_n_steps=50, stage=1):
         self.model = model
         self.tokenizer = tokenizer
         self.every_n_steps = every_n_steps
         self.im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
-        self.prompts = ["What is 2 + 2?", "What is the capital of France?", "Say hello."]
+        self.stage = stage
+
+        if stage == 1:
+            self.prompts = ["What is 2 + 2?", "What is the capital of France?", "Say hello."]
+            self.system_msg = None
+        else:
+            # Stage 2: Function calling prompts
+            self.prompts = ["What's the weather in Tokyo?", "Calculate 15 * 7"]
+            self.system_msg = """You are a helpful assistant with access to the following tools:
+
+[{"name": "get_weather", "parameters": {"location": {"type": "str"}}},
+{"name": "calculate", "parameters": {"expression": {"type": "str"}}}]
+
+When you need to use a tool, respond with:
+<tool_call>
+{"name": "tool_name", "arguments": {"arg": "value"}}
+</tool_call>"""
 
     def on_step_end(self, args, state, control, **kwargs):
         if state.global_step % self.every_n_steps == 0 and state.global_step > 0:
             print(f"\n{'='*50} Step {state.global_step} {'='*50}")
 
             for prompt in self.prompts:
+                if self.system_msg:
+                    messages = [
+                        {"role": "system", "content": self.system_msg},
+                        {"role": "user", "content": prompt}
+                    ]
+                else:
+                    messages = [{"role": "user", "content": prompt}]
+
                 inputs = self.tokenizer.apply_chat_template(
-                    [{"role": "user", "content": prompt}],
-                    tokenize=True, add_generation_prompt=True, return_tensors="pt"
+                    messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
                 ).to(self.model.device)
 
                 self.model.eval()
@@ -123,7 +146,7 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size, push
     trainer = SFTTrainer(
         model=model, tokenizer=tokenizer, train_dataset=dataset,
         dataset_text_field="text", max_seq_length=2048, args=training_args,
-        callbacks=[GenerationCallback(model, tokenizer)],
+        callbacks=[GenerationCallback(model, tokenizer, stage=stage)],
     )
 
     # Apply label masking
