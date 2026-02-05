@@ -39,6 +39,7 @@ print("INFERENCE TEST")
 print("="*60)
 
 for prompt in test_prompts:
+    # Just user message, no system (matching training data)
     messages = [{"role": "user", "content": prompt}]
 
     inputs = tokenizer.apply_chat_template(

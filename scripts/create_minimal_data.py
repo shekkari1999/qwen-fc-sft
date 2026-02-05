@@ -115,9 +115,9 @@ examples = []
 random.seed(42)
 
 for q, a in qa_pairs:
+    # No system message - just user and assistant
     examples.append({
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": q},
             {"role": "assistant", "content": a}
         ]

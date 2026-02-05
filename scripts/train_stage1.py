@@ -158,7 +158,37 @@ trainer = train_on_responses_only(
     response_part="<|im_start|>assistant\n",
 )
 
-print(f"\nTraining on {len(dataset)} examples for {NUM_EPOCHS} epochs")
+# ============================================================
+# VERIFY: Show that user tokens are -100, assistant tokens are not
+# ============================================================
+print("\n" + "="*60)
+print("LABEL MASKING VERIFICATION")
+print("="*60)
+
+dataloader = trainer.get_train_dataloader()
+batch = next(iter(dataloader))
+input_ids = batch["input_ids"][0]
+labels = batch["labels"][0]
+
+print("Token-by-token breakdown (first example):\n")
+print(f"{'Token':<20} {'ID':<10} {'Label':<10} {'Training?'}")
+print("-" * 50)
+
+for i in range(min(len(input_ids), 30)):  # Show first 30 tokens
+    token_id = input_ids[i].item()
+    label = labels[i].item()
+    token_text = tokenizer.decode([token_id]).replace('\n', '\\n')
+    training = "NO (-100)" if label == -100 else "YES"
+    print(f"{token_text:<20} {token_id:<10} {label:<10} {training}")
+
+print("-" * 50)
+masked = (labels == -100).sum().item()
+trained = (labels != -100).sum().item()
+print(f"\nMasked tokens (user/system): {masked}")
+print(f"Trained tokens (assistant):  {trained}")
+print("="*60 + "\n")
+
+print(f"Training on {len(dataset)} examples for {NUM_EPOCHS} epochs")
 print(f"Total steps: ~{len(dataset) * NUM_EPOCHS // BATCH_SIZE}")
 
 trainer.train()
