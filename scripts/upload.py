@@ -14,11 +14,11 @@ def upload_to_hub(repo_id, private=True):
 
     # Load processed datasets
     print("\nLoading Stage 1 (Chat) data...")
-    stage1 = load_dataset("json", data_files="data/stage1_chat/train_single.jsonl", split="train")
+    stage1 = load_dataset("json", data_files="data/stage1_chat/train_qwen_single.jsonl", split="train")
     print(f"  Loaded {len(stage1)} examples")
 
     print("\nLoading Stage 2 (FC) data...")
-    stage2 = load_dataset("json", data_files="data/stage2_fc/train_single.jsonl", split="train")
+    stage2 = load_dataset("json", data_files="data/stage2_fc/train_qwen_single.jsonl", split="train")
     print(f"  Loaded {len(stage2)} examples")
 
     # Create dataset dict

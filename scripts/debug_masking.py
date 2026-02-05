@@ -26,7 +26,12 @@ def debug_masking(data_path):
     )
 
     # Load just 1 example
-    dataset = load_dataset("json", data_files=data_path, split="train[:1]")
+    if data_path.startswith("hf://"):
+        parts = data_path[5:].split(":")
+        repo_id, split_name = parts[0], parts[1] if len(parts) > 1 else "stage1_chat"
+        dataset = load_dataset(repo_id, split=f"{split_name}[:1]")
+    else:
+        dataset = load_dataset("json", data_files=data_path, split="train[:1]")
 
     def format_chat(examples):
         return {"text": [tokenizer.apply_chat_template(m, tokenize=False, add_generation_prompt=False)

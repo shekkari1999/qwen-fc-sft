@@ -1,8 +1,13 @@
 """
 Train model: Stage 1 (Chat) or Stage 2 (Function Calling)
-Usage:
-  python scripts/train.py --stage 1 --data data/minimal/train.jsonl
-  python scripts/train.py --stage 2 --base ./checkpoints/stage1/merged
+
+Usage (local data):
+  python scripts/train.py --stage 1
+  python scripts/train.py --stage 2
+
+Usage (HuggingFace Hub):
+  python scripts/train.py --stage 1 --data hf://shekkari21/qwen-fc-sft-data-v2:stage1_chat
+  python scripts/train.py --stage 2 --data hf://shekkari21/qwen-fc-sft-data-v2:stage2_fc
 """
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
@@ -74,7 +79,13 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size):
 
     # Load data
     print(f"\nLoading data from {data_path}...")
-    dataset = load_dataset("json", data_files=data_path, split="train")
+    if data_path.startswith("hf://"):
+        # Load from HuggingFace Hub: hf://username/repo:split
+        parts = data_path[5:].split(":")
+        repo_id, split_name = parts[0], parts[1] if len(parts) > 1 else "stage1_chat"
+        dataset = load_dataset(repo_id, split=split_name)
+    else:
+        dataset = load_dataset("json", data_files=data_path, split="train")
     print(f"  {len(dataset)} examples")
 
     def format_chat(examples):
@@ -138,13 +149,17 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", type=int, choices=[1, 2], default=1)
-    parser.add_argument("--data", default="data/minimal/train.jsonl")
+    parser.add_argument("--data", default=None, help="Auto-selects based on stage if not provided")
     parser.add_argument("--base", default="Qwen/Qwen2.5-3B")
     parser.add_argument("--output", default=None)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--batch", type=int, default=4)
     args = parser.parse_args()
+
+    # Auto-select data and output based on stage
+    if args.data is None:
+        args.data = f"data/stage{args.stage}_{'chat' if args.stage == 1 else 'fc'}/train_qwen_single.jsonl"
 
     if args.output is None:
         args.output = f"./checkpoints/stage{args.stage}"
