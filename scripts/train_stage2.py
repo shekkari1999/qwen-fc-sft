@@ -1,21 +1,20 @@
 """
-Stage 2: Function Calling SFT - Teach model to use tools
-Run on RunPod with A6000 GPU
+Stage 2 v2: Function Calling SFT
+Uses Stage 1 v2 checkpoint + smaller FC dataset
 
-Usage: python train_stage2.py
+Usage: python scripts/train_stage2_v2.py
 """
 
 from unsloth import FastLanguageModel
-from unsloth.chat_templates import get_chat_template
 from trl import SFTTrainer
 from transformers import TrainingArguments
 from datasets import load_dataset
 import torch
 
 # ============== CONFIG ==============
-# Load from Stage 1 checkpoint
-MODEL_NAME = "./checkpoints/stage1/merged"  # Use merged model from stage 1
-OUTPUT_DIR = "./checkpoints/stage2"
+MODEL_NAME = "./checkpoints/stage1_v2/merged"  # From Stage 1 v2
+DATASET_NAME = "shekkari21/qwen-fc-sft-data-v2"
+OUTPUT_DIR = "./checkpoints/stage2_v2"
 MAX_SEQ_LENGTH = 2048
 BATCH_SIZE = 4
 GRAD_ACCUM = 4
@@ -26,10 +25,10 @@ LORA_ALPHA = 16
 # ====================================
 
 print("="*60)
-print("STAGE 2: FUNCTION CALLING SFT")
+print("STAGE 2 v2: FUNCTION CALLING SFT")
 print("="*60)
 
-# Load model from Stage 1
+# Load Stage 1 model
 print(f"\nLoading Stage 1 model from {MODEL_NAME}...")
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=MODEL_NAME,
@@ -38,7 +37,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_4bit=True,
 )
 
-# Add LoRA adapters (fresh adapters for stage 2)
+# Add LoRA adapters (fresh for stage 2)
 print("Adding LoRA adapters...")
 model = FastLanguageModel.get_peft_model(
     model,
@@ -54,7 +53,7 @@ model = FastLanguageModel.get_peft_model(
 
 # Load dataset
 print("\nLoading function calling dataset...")
-dataset = load_dataset("shekkari21/qwen-fc-sft-data", split="stage2_fc")
+dataset = load_dataset(DATASET_NAME, split="stage2_fc")
 print(f"Loaded {len(dataset)} examples")
 
 # Format function
@@ -81,7 +80,7 @@ training_args = TrainingArguments(
     num_train_epochs=NUM_EPOCHS,
     learning_rate=LEARNING_RATE,
     logging_steps=10,
-    save_steps=500,
+    save_steps=200,
     save_total_limit=2,
     bf16=True,
     optim="adamw_8bit",
@@ -104,11 +103,11 @@ print(f"\n{'='*60}")
 print("TRAINING CONFIG")
 print(f"{'='*60}")
 print(f"Base Model:     {MODEL_NAME}")
+print(f"Dataset:        {DATASET_NAME}")
 print(f"LoRA Rank:      {LORA_R}")
 print(f"Batch Size:     {BATCH_SIZE} x {GRAD_ACCUM} = {BATCH_SIZE * GRAD_ACCUM}")
 print(f"Learning Rate:  {LEARNING_RATE}")
 print(f"Epochs:         {NUM_EPOCHS}")
-print(f"Max Seq Length: {MAX_SEQ_LENGTH}")
 print(f"Dataset Size:   {len(dataset)}")
 print(f"Output:         {OUTPUT_DIR}")
 print(f"{'='*60}\n")
@@ -117,16 +116,15 @@ print(f"{'='*60}\n")
 print("Starting training...")
 trainer.train()
 
-# Save final model
+# Save
 print("\nSaving model...")
 model.save_pretrained(f"{OUTPUT_DIR}/final")
 tokenizer.save_pretrained(f"{OUTPUT_DIR}/final")
 
-# Save merged model
 print("Saving merged model...")
 model.save_pretrained_merged(f"{OUTPUT_DIR}/merged", tokenizer, save_method="merged_16bit")
 
 print("\n" + "="*60)
-print("STAGE 2 COMPLETE!")
+print("STAGE 2 v2 COMPLETE!")
 print(f"Final model saved to: {OUTPUT_DIR}/merged")
 print("="*60)
