@@ -19,29 +19,19 @@ import argparse
 
 
 class GenerationCallback(TrainerCallback):
-    """Monitor training with sample generations - interactive mode"""
+    """Monitor training with sample generations"""
     def __init__(self, model, tokenizer, every_n_steps=50):
         self.model = model
         self.tokenizer = tokenizer
         self.every_n_steps = every_n_steps
         self.im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
-        self.default_prompts = ["What is 2 + 2?", "What is the capital of France?"]
+        self.prompts = ["What is 2 + 2?", "What is the capital of France?", "Say hello."]
 
     def on_step_end(self, args, state, control, **kwargs):
         if state.global_step % self.every_n_steps == 0 and state.global_step > 0:
             print(f"\n{'='*50} Step {state.global_step} {'='*50}")
 
-            # Ask user for custom question (or press Enter to skip)
-            try:
-                user_q = input("Enter a test question (or press Enter for defaults): ").strip()
-                if user_q:
-                    prompts = [user_q] + self.default_prompts[:1]  # User question + 1 default
-                else:
-                    prompts = self.default_prompts
-            except EOFError:
-                prompts = self.default_prompts
-
-            for prompt in prompts:
+            for prompt in self.prompts:
                 inputs = self.tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
                     tokenize=True, add_generation_prompt=True, return_tensors="pt"
