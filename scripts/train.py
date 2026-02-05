@@ -158,7 +158,7 @@ if __name__ == "__main__":
     parser.add_argument("--base", default="Qwen/Qwen2.5-3B")
     parser.add_argument("--output", default=None)
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch", type=int, default=4)
     args = parser.parse_args()
 
