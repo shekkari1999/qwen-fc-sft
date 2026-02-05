@@ -110,6 +110,12 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size, push
         # Adapter is already loaded from Stage 1 checkpoint
         print("Continuing training existing LoRA adapter on FC data...")
 
+        # Ensure lm_head LoRA is trainable (needed for <tool_call> special tokens)
+        for name, param in model.named_parameters():
+            if 'lm_head' in name and 'lora' in name.lower():
+                param.requires_grad = True
+                print(f"  Enabled training for: {name}")
+
     # Load data
     print(f"\nLoading data from {data_path}...")
     if data_path.startswith("hf://"):
