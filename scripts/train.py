@@ -68,12 +68,12 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size):
 
     tokenizer = get_chat_template(tokenizer, chat_template="qwen-2.5")
 
-    # Add LoRA (include embed_tokens and lm_head to learn special tokens like <|im_end|>)
+    # Add LoRA (include lm_head to learn to OUTPUT special tokens like <|im_end|>)
     print("Adding LoRA adapters...")
     model = FastLanguageModel.get_peft_model(
         model, r=16,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
-                        "embed_tokens", "lm_head"],
+                        "lm_head"],
         lora_alpha=16, lora_dropout=0, bias="none",
         use_gradient_checkpointing="unsloth", random_state=42,
     )
