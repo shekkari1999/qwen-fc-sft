@@ -162,9 +162,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch", type=int, default=4)
     args = parser.parse_args()
 
-    # Auto-select data and output based on stage
+    # Auto-select data and output based on stage (default to HuggingFace Hub)
     if args.data is None:
-        args.data = f"data/stage{args.stage}_{'chat' if args.stage == 1 else 'fc'}/train_qwen_single.jsonl"
+        args.data = f"hf://shekkari21/qwen-fc-sft-data-v2:stage{args.stage}_{'chat' if args.stage == 1 else 'fc'}"
 
     if args.output is None:
         args.output = f"./checkpoints/stage{args.stage}"
