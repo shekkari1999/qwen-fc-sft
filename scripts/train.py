@@ -89,8 +89,13 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size):
     print(f"  {len(dataset)} examples")
 
     def format_chat(examples):
-        return {"text": [tokenizer.apply_chat_template(m, tokenize=False, add_generation_prompt=False)
-                         for m in examples["messages"]]}
+        texts = []
+        for m in examples["messages"]:
+            text = tokenizer.apply_chat_template(m, tokenize=False, add_generation_prompt=False)
+            # Remove trailing newline so model learns to stop at <|im_end|>
+            text = text.rstrip('\n')
+            texts.append(text)
+        return {"text": texts}
 
     dataset = dataset.map(format_chat, batched=True, remove_columns=dataset.column_names)
 
