@@ -44,7 +44,7 @@ def generate(model, tokenizer, prompt, max_tokens=100):
 def main():
     # Load both models
     base_model, base_tok = load_model("Qwen/Qwen2.5-3B", "BASE MODEL")
-    ft_model, ft_tok = load_model("./checkpoints/stage1/merged", "FINE-TUNED MODEL")
+    ft_model, ft_tok = load_model("./checkpoints/stage1/final", "FINE-TUNED MODEL (LoRA)")
 
     print("\n" + "="*70)
     print("SIDE-BY-SIDE COMPARISON: Base vs Fine-tuned")
