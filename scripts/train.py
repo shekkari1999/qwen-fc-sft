@@ -48,31 +48,34 @@ When you need to use a tool, respond with:
             print(f"\n{'='*50} Step {state.global_step} {'='*50}")
 
             for prompt in self.prompts:
-                if self.system_msg:
-                    messages = [
-                        {"role": "system", "content": self.system_msg},
-                        {"role": "user", "content": prompt}
-                    ]
-                else:
-                    messages = [{"role": "user", "content": prompt}]
+                try:
+                    if self.system_msg:
+                        messages = [
+                            {"role": "system", "content": self.system_msg},
+                            {"role": "user", "content": prompt}
+                        ]
+                    else:
+                        messages = [{"role": "user", "content": prompt}]
 
-                inputs = self.tokenizer.apply_chat_template(
-                    messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
-                ).to(self.model.device)
+                    inputs = self.tokenizer.apply_chat_template(
+                        messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
+                    ).to(self.model.device)
 
-                self.model.eval()
-                with torch.no_grad():
-                    out = self.model.generate(
-                        input_ids=inputs, max_new_tokens=50, do_sample=False,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        eos_token_id=self.im_end_id,
-                    )
-                self.model.train()
+                    self.model.eval()
+                    with torch.no_grad():
+                        out = self.model.generate(
+                            input_ids=inputs, max_new_tokens=50, do_sample=False,
+                            pad_token_id=self.tokenizer.pad_token_id,
+                            eos_token_id=self.im_end_id,
+                        )
+                    self.model.train()
 
-                gen = out[0][inputs.shape[1]:]
-                resp = self.tokenizer.decode(gen, skip_special_tokens=True).strip()
-                stopped = "YES" if self.im_end_id in gen.tolist() else "NO"
-                print(f"Q: {prompt}\nA: {resp} [stopped: {stopped}]\n")
+                    gen = out[0][inputs.shape[1]:]
+                    resp = self.tokenizer.decode(gen, skip_special_tokens=True).strip()
+                    stopped = "YES" if self.im_end_id in gen.tolist() else "NO"
+                    print(f"Q: {prompt}\nA: {resp} [stopped: {stopped}]\n")
+                except Exception as e:
+                    print(f"Q: {prompt}\nA: [Generation skipped - {type(e).__name__}]\n")
         return control
 
 
@@ -92,15 +95,20 @@ def train(stage, data_path, base_model, output_dir, epochs, lr, batch_size, push
 
     tokenizer = get_chat_template(tokenizer, chat_template="qwen-2.5")
 
-    # Add LoRA (include lm_head to learn to OUTPUT special tokens like <|im_end|>)
-    print("Adding LoRA adapters...")
-    model = FastLanguageModel.get_peft_model(
-        model, r=16,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
-                        "lm_head"],
-        lora_alpha=16, lora_dropout=0, bias="none",
-        use_gradient_checkpointing="unsloth", random_state=42,
-    )
+    if stage == 1:
+        # Stage 1: Add fresh LoRA adapters to base model
+        print("Adding LoRA adapters...")
+        model = FastLanguageModel.get_peft_model(
+            model, r=16,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+                            "lm_head"],
+            lora_alpha=16, lora_dropout=0, bias="none",
+            use_gradient_checkpointing="unsloth", random_state=42,
+        )
+    else:
+        # Stage 2: Continue training existing LoRA adapter on FC data
+        # Adapter is already loaded from Stage 1 checkpoint
+        print("Continuing training existing LoRA adapter on FC data...")
 
     # Load data
     print(f"\nLoading data from {data_path}...")
@@ -202,8 +210,9 @@ if __name__ == "__main__":
         args.output = f"./checkpoints/stage{args.stage}"
 
     if args.stage == 2:
-        args.lr = 1e-4  # Lower LR for stage 2
+        args.lr = 5e-5  # Lower LR for stage 2 to preserve chat skills
         if args.base == "Qwen/Qwen2.5-3B":
-            args.base = "./checkpoints/stage1/final"  # Use adapter, not merged (tied weights issue)
+            # Load Stage 1 adapter to continue training on FC data
+            args.base = "./checkpoints/stage1/final"
 
     train(args.stage, args.data, args.base, args.output, args.epochs, args.lr, args.batch, args.push_to_hub)
