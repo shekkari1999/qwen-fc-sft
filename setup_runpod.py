@@ -7,8 +7,8 @@ import subprocess
 import sys
 
 # Install dependencies
-print("Installing dependencies...")
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "fastapi", "uvicorn", "pydantic", "accelerate", "peft"])
+print("Upgrading transformers and peft...")
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "transformers", "peft", "accelerate", "fastapi", "uvicorn", "pydantic"])
 
 # Now import and run server
 from fastapi import FastAPI
